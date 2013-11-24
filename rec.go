@@ -1,10 +1,17 @@
 package rec
 
 import (
+	"bufio"
 	"bytes"
+	"crypto/sha1"
+	"encoding/binary"
 	"fmt"
+	"io"
 	"math"
+	"os"
 	"sort"
+	"strconv"
+	"strings"
 )
 
 // TODO hashmaps are probably not the most memory-efficient way to do this. Consider binary search
@@ -82,16 +89,52 @@ func (r *Rec) NormalizeUsers() {
 	}
 }
 
+func (r *Rec) GetRating(user, item int) (rating float32, ok bool) {
+	row, ok := r.Matrix.Rows[user]
+	if !ok {
+		return 0, false
+	}
+	rating, ok = row[item]
+	if !ok {
+		return 0, false
+	}
+	return rating, ok
+}
+
 const (
 	// An item must be liked by this many neighbors to be recommended.
-	support = 5
+	support = 40
 
 	// A neighbor must rate an item at least this much for it to count as a supporting vote.
 	// In the range [-1,1]
 	likeThreshold = float32(0.1)
 )
 
-func (r *Rec) Recommend(user int, count int) (items []int, predicted []float32) {
+// Predict a rating by averaging the ratings of the nearest neighbors who have
+// rated it.
+func (r *Rec) PredictRating(user int, item int) (_ float32, ok bool) {
+	neighbors := r.nearestNeighbors(user)
+
+	var sum float32
+	var count int
+	for _, neighbor := range neighbors {
+		neighborRatings := r.Matrix.Rows[neighbor.user]
+		rating, ok := neighborRatings[item]
+		if !ok {
+			continue
+		}
+		count++
+		sum += rating
+		if count == support {
+			return sum / float32(count), true
+		}
+	}
+	return 0, false // Not enough data to make a prediction
+}
+
+// User similarity-based collaborative filtering: given a user, find similar
+// users and recommend the things that they like.
+func (r *Rec) UserCoFilter(user int, count int) (items []int, predicted []float32) {
 	neighbors := r.nearestNeighbors(user)
 
 	// TODO time and space efficiency
@@ -228,6 +271,69 @@ func (r *Rec) cosineSimilarity(user1, user2 int) float32 {
 
 	// user1Norm
 
+}
+
+func LoadMovieLens(ratingsDatFile string, rec *Rec, trainOrTest bool) error {
+	fh, err := os.Open(ratingsDatFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed opening input file: %s\n", err.Error())
+		os.Exit(1)
+	}
+	defer fh.Close()
+
+	bufRd := bufio.NewReader(fh)
+	for {
+		line, err := bufRd.ReadString('\n')
+		if err != nil && err != io.EOF {
+			return fmt.Errorf("Failed reading input file: %s", err.Error())
+		}
+		if line == "" {
+			break
+		}
+
+		// We return 80% of the data for training, or 20% for testing. These
+		// two data sets are mutually exclusive.
+		isTestData := sha1HashMod(line, 10) < 2
+		// fmt.Printf("isTestData=%v\n", isTestData)
+		if isTestData && trainOrTest {
+			continue
+		} else if !isTestData && !trainOrTest {
+			continue
+		}
+
+		tokens := strings.Split(line, "::")
+		// fmt.Printf("Line is %s, tokens are %s\n", line, tokens)
+
+		user, err := strconv.Atoi(tokens[0])
+		if err != nil {
+			return fmt.Errorf("Invalid user ID: %s", tokens[0])
+		}
+		movieId, err := strconv.Atoi(tokens[1])
+		if err != nil {
+			return fmt.Errorf("Invalid movie ID")
+		}
+		rating, err := strconv.Atoi(tokens[2])
+		if err != nil {
+			return fmt.Errorf("Invalid rating\n")
+		}
+
+		rec.AddRating(user, movieId, float32(rating))
+
+		if err == io.EOF {
+			break
+		}
+	}
+	return nil
+}
+
+func sha1HashMod(s string, mod int) int {
+	hash := sha1.New()
+	hash.Write([]byte(s))
+	hashBytes := hash.Sum(nil)
+	asU64 := binary.BigEndian.Uint64(hashBytes)
+	hashMod := int(asU64 % (uint64(mod)))
+	// fmt.Printf("Hash of %s: %d\n", s, hashMod)
+	return hashMod
 }
 
 func intMax(i1, i2 int) int {

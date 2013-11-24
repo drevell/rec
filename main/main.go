@@ -1,14 +1,11 @@
 package main
 
 import (
-	rec ".."
-	"bufio"
+	recpkg ".."
 	"flag"
 	"fmt"
-	"io"
+	"math"
 	"os"
-	"strconv"
-	"strings"
 )
 
 func main() {
@@ -21,64 +18,65 @@ func main() {
 
 	filename := flag.Args()[0]
 
-	rec := rec.NewRec()
-	if err := LoadMovieLens(filename, rec); err != nil {
+	fmt.Printf("Loading training set\n")
+	trainData := recpkg.NewRec()
+	if err := recpkg.LoadMovieLens(filename, trainData, true); err != nil {
 		fmt.Fprintf(os.Stderr, "%s\n", err.Error())
 		os.Exit(1)
 	}
 
-	var userId int
-	for tmpUserId, _ := range rec.Matrix.Rows {
-		userId = tmpUserId
-	}
-	// fmt.Printf("Some input row: %s\n", rec.Matrix.Rows[userId])
-	rec.NormalizeUsers()
-	// fmt.Printf("After normalizing: %s\n", rec.Matrix.Rows[userId])
-
-	items, scores := rec.Recommend(userId, 3)
-	if items == nil {
-		fmt.Printf("Prediction failed")
-	}
-	fmt.Printf("Recommendations for %d: %d, predicted scores %s\n", userId, items, scores)
-}
-
-func LoadMovieLens(ratingsDatFile string, rec *rec.Rec) error {
-	fh, err := os.Open(ratingsDatFile)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed opening input file: %s\n", err.Error())
+	fmt.Printf("Loading test set\n")
+	testData := recpkg.NewRec()
+	if err := recpkg.LoadMovieLens(filename, testData, false); err != nil {
+		fmt.Fprintf(os.Stderr, "%s\n", err.Error())
 		os.Exit(1)
 	}
-	defer fh.Close()
 
-	bufRd := bufio.NewReader(fh)
-	for {
-		line, err := bufRd.ReadString('\n')
-		if err != nil && err != io.EOF {
-			return fmt.Errorf("Failed reading input file: %s", err.Error())
-		}
-		tokens := strings.Split(line, "::")
-		// fmt.Printf("Line is %s, tokens are %s\n", line, tokens)
-		if line == "" {
-			break
-		}
-		user, err := strconv.Atoi(tokens[0])
-		if err != nil {
-			return fmt.Errorf("Invalid user ID: %s", tokens[0])
-		}
-		movieId, err := strconv.Atoi(tokens[1])
-		if err != nil {
-			return fmt.Errorf("Invalid movie ID")
-		}
-		rating, err := strconv.Atoi(tokens[2])
-		if err != nil {
-			return fmt.Errorf("Invalid rating\n")
-		}
+	// fmt.Printf("Some input row: %s\n", rec.Matrix.Rows[userId])
+	trainData.NormalizeUsers()
+	testData.NormalizeUsers()
+	// fmt.Printf("After normalizing: %s\n", rec.Matrix.Rows[userId])
 
-		rec.AddRating(user, movieId, float32(rating))
-
-		if err == io.EOF {
-			break
+	var errSumSq float64
+	count := 0
+	for userId, row := range testData.Matrix.Rows {
+		for item, actualRating := range row {
+			predictedRating, ok := trainData.PredictRating(userId, item)
+			if !ok {
+				fmt.Printf("Prediction failed\n")
+			} else {
+				err := float64(actualRating) - float64(predictedRating)
+				errSumSq += math.Pow(err, 2)
+				count++
+				rmse := math.Sqrt(errSumSq / float64(count))
+				fmt.Printf("User=%d item=%d predicted=%f actual=%f rmse=%f\n",
+					userId, item, predictedRating, actualRating, rmse)
+			}
 		}
 	}
-	return nil
+
+	// var userId int
+	// for tmpUserId, _ := range trainData.Matrix.Rows {
+	// 	userId = tmpUserId
+	// 	break
+	// }
+
+	// items, scores := trainData.UserCoFilter(userId, 3)
+	// if items == nil {
+	// 	fmt.Printf("Prediction failed\n")
+	// 	os.Exit(1)
+	// }
+
+	// for i := 0; i < len(items); i++ {
+	// 	item := items[i]
+	// 	predicted := scores[i]
+	// 	actual, ok := testData.GetRating(userId, item)
+	// 	if !ok {
+	// 		fmt.Printf("No rating available for item %d\n", item)
+	// 	} else {
+	// 		fmt.Printf("Prediction/actual for %d: %f/%f\n", item, predicted, actual)
+	// 	}
+	// }
+
+	// fmt.Printf("Recommendations for %d: %d, predicted scores %s\n", userId, items, scores)
 }

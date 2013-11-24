@@ -1,0 +1,10 @@
+Test of prediction quality based on the algorithm using the average rating of
+the N closest neighbors who rated the given item.
+
+N	RMSE
+10	.58
+15	.56
+20	.423
+30	.547
+40	.53
+50	.538
